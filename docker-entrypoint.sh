@@ -20,58 +20,37 @@ if [ ! -d "${HOME}/.claude/skills/seo" ] && [ -d /opt/claude-default ]; then
     echo "  ✓ Skills restored"
 fi
 
-# ── Restore ~/.claude.json if missing ────────────────────────────────────────
-# Claude Code stores its auth config at ~/.claude.json (outside ~/.claude/).
-# That file is NOT inside our volume mount, so it disappears on every restart.
-# Strategy (in priority order):
-#   1. ANTHROPIC_API_KEY env var  →  write a minimal config from it
-#   2. Backup file left by Claude Code  →  restore it
+# ── Persist .claude.json inside the volume via symlink ───────────────────────
+# Claude Code writes its auth config to /root/.claude.json (outside the
+# volume), so it is lost on every container restart.  Fix: move the real file
+# inside the volume and replace it with a symlink so future writes persist.
 CLAUDE_JSON="${HOME}/.claude.json"
-if [ ! -f "${CLAUDE_JSON}" ]; then
-    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
-        echo "→ Writing ${CLAUDE_JSON} from ANTHROPIC_API_KEY…"
-        python3 - <<PYEOF
-import json, os
-cfg = {
-    "primaryApiKey": os.environ["ANTHROPIC_API_KEY"],
-    "hasCompletedOnboarding": True,
-    "hasAgreedToTerms": True,
-}
-with open("${CLAUDE_JSON}", "w") as f:
-    json.dump(cfg, f, indent=2)
-print("  ✓ ~/.claude.json written")
-PYEOF
-    else
-        # Fall back to the latest backup Claude Code left behind
-        BACKUP=$(ls -t "${HOME}/.claude/backups/.claude.json.backup."* 2>/dev/null | head -1)
-        if [ -n "${BACKUP}" ]; then
-            echo "→ Restoring ${CLAUDE_JSON} from backup ${BACKUP}…"
-            cp "${BACKUP}" "${CLAUDE_JSON}"
-            echo "  ✓ Restored"
-        else
-            echo "⚠  No ANTHROPIC_API_KEY and no backup found."
-            echo "   Set ANTHROPIC_API_KEY in your environment or log in interactively first."
-        fi
-    fi
+CLAUDE_JSON_IN_VOL="${HOME}/.claude/.claude.json"
+BACKUP_DIR="${HOME}/.claude/backups"
+
+if [ -L "${CLAUDE_JSON}" ]; then
+    : # already a symlink — nothing to do
+elif [ -f "${CLAUDE_JSON_IN_VOL}" ]; then
+    # Volume already has a copy; replace any image-layer file with symlink
+    rm -f "${CLAUDE_JSON}"
+    ln -sf "${CLAUDE_JSON_IN_VOL}" "${CLAUDE_JSON}"
+    echo "→ .claude.json symlinked to volume copy"
+elif [ -f "${CLAUDE_JSON}" ]; then
+    # First run with a real file: move it into the volume and symlink back
+    cp "${CLAUDE_JSON}" "${CLAUDE_JSON_IN_VOL}"
+    rm -f "${CLAUDE_JSON}"
+    ln -sf "${CLAUDE_JSON_IN_VOL}" "${CLAUDE_JSON}"
+    echo "→ .claude.json moved into volume and symlinked"
 else
-    # File exists — make sure the API key in it matches the current env var
-    # (handles key rotation without requiring a manual volume update)
-    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
-        python3 - <<PYEOF
-import json, os
-path = "${CLAUDE_JSON}"
-key  = os.environ["ANTHROPIC_API_KEY"]
-try:
-    with open(path) as f:
-        cfg = json.load(f)
-    if cfg.get("primaryApiKey") != key:
-        cfg["primaryApiKey"] = key
-        with open(path, "w") as f:
-            json.dump(cfg, f, indent=2)
-        print("  ✓ ~/.claude.json API key updated")
-except Exception:
-    pass
-PYEOF
+    # No file anywhere; check for a backup left by a previous Claude Code run
+    LATEST_BACKUP=$(ls -t "${BACKUP_DIR}/.claude.json.backup."* 2>/dev/null | head -1 || true)
+    if [ -n "${LATEST_BACKUP}" ]; then
+        echo "→ Restoring .claude.json from backup: ${LATEST_BACKUP}"
+        cp "${LATEST_BACKUP}" "${CLAUDE_JSON_IN_VOL}"
+        ln -sf "${CLAUDE_JSON_IN_VOL}" "${CLAUDE_JSON}"
+        echo "  ✓ .claude.json restored"
+    else
+        echo "→ No .claude.json found; Claude Code will create one on first auth"
     fi
 fi
 
