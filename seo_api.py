@@ -316,7 +316,7 @@ def _start_audit(url: str, command: str) -> tuple[str, dict]:
     (run_path / "meta.json").write_text(json.dumps(meta, indent=2))
 
     cmd = [
-        "claude", "--output-format", "stream-json",
+        "claude", "--output-format", "stream-json", "--verbose",
         "-p", _build_prompt(command, url),
         "--allowedTools", "Bash,Read,Write,WebFetch,WebSearch",
     ]
