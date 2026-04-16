@@ -60,15 +60,27 @@
   </div>
 </div>
 
+{# File tab bar — populated by JS once extra files are discovered #}
+<div class="file-tab-bar" id="fileTabBar" style="display:none">
+  <button class="file-tab active" data-key="output" onclick="switchTab('output', this)">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+    Summary
+  </button>
+  {# Extra file tabs injected here by loadAuditFiles() #}
+</div>
+
 <div class="output-card" id="outputCard">
   <div class="output-header">
     <span id="outputLabel">
       {% if meta.status == "running" %}live output{% else %}report{% endif %}
     </span>
     <div style="display:flex;gap:.5rem;align-items:center">
+      <button class="copy-btn download-btn" id="downloadBtn" onclick="downloadCurrent()" title="Download this file">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download
+      </button>
       {% if meta.status != "running" %}
-      <button class="copy-btn" id="viewToggle">Raw</button>
-      <a class="copy-btn" href="/api/audits/{{ meta.id }}/raw" target="_blank">JSON</a>
+      <button class="copy-btn" id="viewToggle" style="display:none">Raw</button>
       {% endif %}
       <button class="copy-btn" id="copyBtn">Copy</button>
     </div>
@@ -89,63 +101,183 @@
   const isLive    = {{ (meta.status == "running") | tojson }};
   const startedAt = new Date({{ meta.started_at | tojson }});
 
-  const pre          = document.getElementById('outputPre');
-  const rendered     = document.getElementById('renderedOutput');
-  const outputCard   = document.getElementById('outputCard');
-  const statusBadge  = document.getElementById('statusBadge');
-  const outputLabel  = document.getElementById('outputLabel');
-  const viewToggle   = document.getElementById('viewToggle');
-  const copyBtn      = document.getElementById('copyBtn');
-  const liveDurEl    = document.getElementById('liveDuration');
-  const durEl        = document.getElementById('duration');
+  const pre         = document.getElementById('outputPre');
+  const rendered    = document.getElementById('renderedOutput');
+  const outputCard  = document.getElementById('outputCard');
+  const statusBadge = document.getElementById('statusBadge');
+  const outputLabel = document.getElementById('outputLabel');
+  const viewToggle  = document.getElementById('viewToggle');
+  const copyBtn     = document.getElementById('copyBtn');
+  const liveDurEl   = document.getElementById('liveDuration');
+  const durEl       = document.getElementById('duration');
+  const tabBar      = document.getElementById('fileTabBar');
 
-  // ── Static duration ────────────────────────────────────────────────────
+  // Current active tab key: 'output' or a filename like 'FULL-AUDIT-REPORT.md'
+  let activeTab      = 'output';
+  let showingRaw     = false;
+  // Cache fetched file contents { filename: text }
+  const fileCache    = {};
+
+  // ── Static duration ───────────────────────────────────────────────────
   if (durEl) {
     const ms = new Date(durEl.dataset.end) - new Date(durEl.dataset.start);
     const s  = Math.round(ms / 1000);
     durEl.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
   }
 
-  // ── Render markdown helper ─────────────────────────────────────────────
-  function renderMarkdown() {
-    const rawText = pre.textContent;
-    if (!rawText.trim()) return;
-    rendered.innerHTML = marked.parse(rawText, { breaks: true, gfm: true });
+  // ── Helpers ───────────────────────────────────────────────────────────
+  function friendlyName(filename) {
+    return filename
+      .replace(/\.[^.]+$/, '')          // strip extension
+      .replace(/[-_]+/g, ' ')           // dashes/underscores → spaces
+      .replace(/\b\w/g, c => c.toUpperCase()); // Title Case
+  }
+
+  function renderMarkdown(text) {
+    rendered.innerHTML = marked.parse(text || '', { breaks: true, gfm: true });
     rendered.style.display = 'block';
     pre.style.display      = 'none';
     outputCard.classList.add('output-card-light');
-    outputLabel.textContent = 'report';
-    if (viewToggle) viewToggle.style.display = 'inline-block';
+    showingRaw = false;
+    if (viewToggle) { viewToggle.textContent = 'Raw'; viewToggle.style.display = 'inline-block'; }
   }
 
-  // ── Copy button ────────────────────────────────────────────────────────
+  function showRaw(text) {
+    pre.textContent    = text;
+    pre.style.display  = 'block';
+    rendered.style.display = 'none';
+    outputCard.classList.remove('output-card-light');
+    showingRaw = true;
+    if (viewToggle) viewToggle.textContent = 'Rendered';
+  }
+
+  // ── Download current view ─────────────────────────────────────────────
+  window.downloadCurrent = function () {
+    if (activeTab === 'output') {
+      // Blob download of the summary text
+      const text = pre.textContent || rendered.textContent || '';
+      const blob = new Blob([text], { type: 'text/plain' });
+      triggerDownload(blob, 'audit-summary.txt');
+    } else {
+      // Direct file download via API
+      window.open(`/api/audits/${runId}/files/${encodeURIComponent(activeTab)}?download=true`, '_blank');
+    }
+  };
+
+  function triggerDownload(blob, filename) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  }
+
+  // ── Tab switching ─────────────────────────────────────────────────────
+  window.switchTab = function (key, btn) {
+    // Update active tab button
+    document.querySelectorAll('.file-tab').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeTab = key;
+
+    if (key === 'output') {
+      outputLabel.textContent = isLive ? 'live output' : 'report';
+      const summaryText = pre.textContent;
+      if (!isLive) {
+        if (showingRaw) {
+          showRaw(summaryText);
+        } else {
+          renderMarkdown(summaryText);
+        }
+      }
+    } else {
+      // Load file content (with cache)
+      outputLabel.textContent = key;
+      if (fileCache[key] !== undefined) {
+        renderMarkdown(fileCache[key]);
+      } else {
+        rendered.innerHTML = '<p style="color:var(--muted);padding:2rem">Loading…</p>';
+        rendered.style.display = 'block';
+        pre.style.display = 'none';
+        outputCard.classList.add('output-card-light');
+        fetch(`/api/audits/${runId}/files/${encodeURIComponent(key)}`)
+          .then(r => r.ok ? r.json() : Promise.reject(r.status))
+          .then(data => {
+            fileCache[key] = data.content;
+            if (activeTab === key) renderMarkdown(data.content);
+          })
+          .catch(err => {
+            if (activeTab === key) {
+              rendered.innerHTML = `<p style="color:var(--red)">Failed to load file (${err})</p>`;
+            }
+          });
+      }
+    }
+  };
+
+  // ── Load extra files and build tab bar ───────────────────────────────
+  function loadAuditFiles() {
+    fetch(`/api/audits/${runId}/files`)
+      .then(r => r.json())
+      .then(files => {
+        if (!files.length) return;
+        tabBar.style.display = 'flex';
+        files.forEach(f => {
+          const btn = document.createElement('button');
+          btn.className = 'file-tab';
+          btn.dataset.key = f.name;
+          btn.innerHTML = `
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+            </svg>
+            ${friendlyName(f.name)}`;
+          btn.onclick = () => switchTab(f.name, btn);
+          tabBar.appendChild(btn);
+        });
+        // Auto-open the first extra file if audit is complete
+        if (!isLive && files.length) {
+          const firstBtn = tabBar.querySelectorAll('.file-tab')[1];
+          if (firstBtn) firstBtn.click();
+        }
+      })
+      .catch(() => {});
+  }
+
+  // ── Copy button ───────────────────────────────────────────────────────
   copyBtn.addEventListener('click', () => {
-    const text = pre.textContent || rendered.textContent;
+    const text = showingRaw
+      ? pre.textContent
+      : (rendered.style.display !== 'none' ? rendered.innerText : pre.textContent);
     navigator.clipboard.writeText(text).then(() => {
       copyBtn.textContent = 'Copied!';
       setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
     });
   });
 
-  // ── Raw / Rendered toggle ──────────────────────────────────────────────
-  let showingRaw = false;
+  // ── Raw / Rendered toggle ─────────────────────────────────────────────
   if (viewToggle) {
     viewToggle.addEventListener('click', () => {
-      showingRaw = !showingRaw;
-      rendered.style.display      = showingRaw ? 'none'         : 'block';
-      pre.style.display           = showingRaw ? 'block'        : 'none';
-      outputCard.classList.toggle('output-card-light', !showingRaw);
-      viewToggle.textContent      = showingRaw ? 'Rendered'     : 'Raw';
+      const currentText = showingRaw
+        ? pre.textContent
+        : (fileCache[activeTab] !== undefined ? fileCache[activeTab] : pre.textContent);
+      if (showingRaw) {
+        renderMarkdown(currentText);
+      } else {
+        showRaw(currentText);
+      }
     });
   }
 
-  // ── Immediately render if the audit is already complete ────────────────
+  // ── Immediately render + load files if audit is already complete ───────
   if (!isLive) {
-    renderMarkdown();
+    renderMarkdown(pre.textContent);
+    loadAuditFiles();
     return;
   }
 
-  // ── Live streaming via SSE ─────────────────────────────────────────────
+  // ── Live streaming via SSE ────────────────────────────────────────────
   let autoScroll = true;
   pre.addEventListener('scroll', () => {
     autoScroll = pre.scrollHeight - pre.scrollTop <= pre.clientHeight + 80;
@@ -180,19 +312,16 @@
       liveDurEl.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
     }
 
-    // Fetch final meta to update cost card
+    // Show rendered view and load any extra files
+    renderMarkdown(pre.textContent);
+    if (viewToggle) viewToggle.style.display = 'inline-block';
+    loadAuditFiles();
+
+    // Reload if there's cost data to show
     fetch(`/api/audits/${runId}`)
       .then(r => r.json())
-      .then(m => {
-        if (m.cost_usd != null) {
-          // Reload the page so the cost card appears cleanly
-          window.location.reload();
-        } else {
-          // No cost data — just switch to rendered view in place
-          renderMarkdown();
-        }
-      })
-      .catch(() => renderMarkdown());
+      .then(m => { if (m.cost_usd != null) setTimeout(() => window.location.reload(), 800); })
+      .catch(() => {});
   });
 
   source.onerror = () => {

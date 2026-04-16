@@ -256,6 +256,43 @@ nav a.nav-link:hover { color: #fff; }
 .badge-timeout { background: #fef9c3; color: var(--amber); }
 .badge-running { background: #dbeafe; color: var(--brand); }
 
+/* ── File tab bar ────────────────────────────────────────────────────────── */
+
+.file-tab-bar {
+  display: flex;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.625rem;
+  padding: 0.5rem 0.625rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+}
+
+.file-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+
+.file-tab:hover { background: #e8f0fe; color: var(--brand); border-color: #c7d7fd; }
+
+.file-tab.active {
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
+}
+
 /* ── Live indicator ──────────────────────────────────────────────────────── */
 
 .live-dot {
@@ -527,6 +564,9 @@ nav a.nav-link:hover { color: #fff; }
 }
 
 .copy-btn:hover { background: rgba(255, 255, 255, 0.14); color: #e2e8f0; }
+
+.download-btn { gap: 0.3rem; }
+.download-btn svg { flex-shrink: 0; }
 
 /* ── Cost display ────────────────────────────────────────────────────────── */
 

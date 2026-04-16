@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -618,6 +618,50 @@ def api_get_audit_raw(run_id: str) -> dict:
     if not output_path.exists():
         raise HTTPException(status_code=404, detail="No output recorded for this audit")
     return {"output": output_path.read_text()}
+
+
+# Files written by claude into the audit directory (e.g. FULL-AUDIT-REPORT.md)
+_EXTRA_FILE_SUFFIXES = {".md", ".csv", ".html", ".txt"}
+_EXCLUDED_FILES = {"meta.json", "output.txt", "events.jsonl"}
+
+
+@app.get("/api/audits/{run_id}/files", tags=["audits"])
+def api_list_audit_files(run_id: str) -> list[dict]:
+    """List extra files written by Claude into the audit directory."""
+    _get_meta(run_id)
+    run_path = _run_dir(run_id)
+    files = []
+    for f in sorted(run_path.iterdir()):
+        if (f.is_file()
+                and f.name not in _EXCLUDED_FILES
+                and f.suffix.lower() in _EXTRA_FILE_SUFFIXES):
+            files.append({"name": f.name, "size": f.stat().st_size})
+    return files
+
+
+@app.get("/api/audits/{run_id}/files/{filename}", tags=["audits"])
+def api_get_audit_file(run_id: str, filename: str, download: bool = False):
+    """
+    Return the content of a file written by Claude into the audit directory.
+    Pass ?download=true to receive it as a file attachment.
+    """
+    _get_meta(run_id)
+    run_path = _run_dir(run_id).resolve()
+    file_path = (run_path / filename).resolve()
+    # Path-traversal guard
+    try:
+        file_path.relative_to(run_path)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    if download:
+        return FileResponse(
+            path=str(file_path),
+            filename=filename,
+            media_type="application/octet-stream",
+        )
+    return {"name": filename, "content": file_path.read_text(errors="replace")}
 
 
 # ── HTML UI ───────────────────────────────────────────────────────────────────
