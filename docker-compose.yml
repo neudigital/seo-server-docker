@@ -1,0 +1,68 @@
+services:
+  claude-seo:
+    # Use the pre-built image from GHCR:
+    #   image: ghcr.io/<your-github-username>/seo-server-docker:latest
+    # Or build locally:
+    build: .
+    container_name: claude-seo-server
+    restart: unless-stopped
+
+    ports:
+      - "${HOST_PORT:-5300}:${PORT:-5300}"
+
+    environment:
+      PORT: "${PORT:-5300}"
+      AUDIT_DATA_DIR: /data/audits
+
+      # ── Anthropic / Claude Code ──────────────────────────────────────────
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+
+      # ── DataForSEO (optional) ────────────────────────────────────────────
+      # Sign up at https://app.dataforseo.com/register
+      DATAFORSEO_USERNAME: "${DATAFORSEO_USERNAME:-}"
+      DATAFORSEO_PASSWORD: "${DATAFORSEO_PASSWORD:-}"
+      # Comma-separated module list — defaults to all 9 modules when unset:
+      # SERP,KEYWORDS_DATA,ONPAGE,DATAFORSEO_LABS,BACKLINKS,
+      # DOMAIN_ANALYTICS,BUSINESS_DATA,CONTENT_ANALYSIS,AI_OPTIMIZATION
+      ENABLED_MODULES: "${ENABLED_MODULES:-}"
+
+      # ── Google APIs (optional) ───────────────────────────────────────────
+      # Tier 0 — PageSpeed, CrUX, Knowledge Graph (free API key)
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
+      # Tier 1+ — Search Console, Indexing API, GA4
+      # Path inside the container to the service account JSON file.
+      # Mount the file via volumes below and set this to its container path.
+      GOOGLE_APPLICATION_CREDENTIALS: "${GOOGLE_APPLICATION_CREDENTIALS:-}"
+      GSC_PROPERTY: "${GSC_PROPERTY:-}"         # e.g. sc-domain:example.com
+      GA4_PROPERTY_ID: "${GA4_PROPERTY_ID:-}"   # e.g. properties/123456789
+
+      # ── API security (optional) ──────────────────────────────────────────
+      # Set to require an X-API-Key header on POST /api/run-audit.
+      # Leave empty to disable key checking (LAN-only deployments).
+      API_KEY: "${API_KEY:-}"
+
+      # ── Audit timeout ────────────────────────────────────────────────────
+      # Seconds before a running claude process is killed (default 5400 = 90 min)
+      AUDIT_TIMEOUT_SECONDS: "${AUDIT_TIMEOUT_SECONDS:-5400}"
+
+    volumes:
+      # Persist audit history across container restarts and updates
+      - audit-data:/data/audits
+      # Persist Claude Code login state (ANTHROPIC_API_KEY is preferred,
+      # but this keeps any cached tokens or settings changes)
+      - claude-config:/root/.claude
+      # Persist Google OAuth token and claude-seo google-api.json
+      - google-config:/root/.config/claude-seo
+      # ── Service account JSON (if using GSC/GA4) ──────────────────────────
+      # Uncomment and adjust to mount your service account key file:
+      # - /path/on/host/service_account.json:/secrets/service_account.json:ro
+      # Then set GOOGLE_APPLICATION_CREDENTIALS=/secrets/service_account.json
+
+    # Watchtower label: set to "true" to include this container in auto-updates
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+
+volumes:
+  audit-data:
+  claude-config:
+  google-config:

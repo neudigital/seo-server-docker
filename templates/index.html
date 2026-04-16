@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Audits — Claude SEO{% endblock %}
+
+{% block content %}
+
+<div class="run-card">
+  <h2>Run a new audit</h2>
+  <form class="run-form" id="auditForm">
+    <input
+      type="url"
+      id="auditUrl"
+      name="url"
+      placeholder="https://example.com"
+      required
+      autocomplete="url"
+    />
+    <select id="auditCommand" name="command">
+      {% for cmd in commands %}
+      <option value="{{ cmd }}"{% if cmd == "audit" %} selected{% endif %}>{{ cmd }}</option>
+      {% endfor %}
+    </select>
+    {% if api_key_required %}
+    <input
+      type="password"
+      id="auditApiKey"
+      name="api_key"
+      placeholder="X-API-Key"
+      autocomplete="off"
+      title="API key required by this server"
+    />
+    {% endif %}
+    <button type="submit" id="submitBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      Run audit
+    </button>
+  </form>
+  <div class="progress-msg" id="progressMsg">
+    <span class="spinner"></span>
+    <span id="progressText">Running audit — this can take several minutes…</span>
+  </div>
+  <div class="alert alert-error" id="errorMsg" style="display:none;margin-top:.75rem"></div>
+</div>
+
+<p class="section-title">Recent audits</p>
+
+{% if audits %}
+<table class="audit-table">
+  <thead>
+    <tr>
+      <th>URL</th>
+      <th>Command</th>
+      <th>Status</th>
+      <th>Started</th>
+      <th>Duration</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for a in audits %}
+    <tr>
+      <td class="url-cell" title="{{ a.url }}">{{ a.url }}</td>
+      <td><code>{{ a.command }}</code></td>
+      <td>
+        <span class="badge badge-{{ a.status }}">{{ a.status }}</span>
+      </td>
+      <td class="ts-cell">{{ a.started_at[:19].replace("T", " ") }} UTC</td>
+      <td>
+        {% if a.finished_at %}
+          {%- set s = (a.finished_at[:19] | string) -%}
+          {%- set e = (a.started_at[:19] | string) -%}
+          <span class="duration" data-start="{{ a.started_at }}" data-end="{{ a.finished_at }}">—</span>
+        {% else %}
+          <span class="badge badge-running">running</span>
+        {% endif %}
+      </td>
+      <td><a href="/audits/{{ a.id }}">View →</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty-state">
+  <p>No audits yet. Run your first one above.</p>
+</div>
+{% endif %}
+
+<script>
+(function () {
+  // Restore API key from localStorage
+  const keyField = document.getElementById('auditApiKey');
+  if (keyField) {
+    keyField.value = localStorage.getItem('seo_api_key') || '';
+    keyField.addEventListener('change', () => {
+      localStorage.setItem('seo_api_key', keyField.value);
+    });
+  }
+
+  // Compute and display durations
+  document.querySelectorAll('.duration[data-start][data-end]').forEach(el => {
+    const ms = new Date(el.dataset.end) - new Date(el.dataset.start);
+    const s = Math.round(ms / 1000);
+    el.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  });
+
+  // Form submission via fetch
+  const form = document.getElementById('auditForm');
+  const submitBtn = document.getElementById('submitBtn');
+  const progressMsg = document.getElementById('progressMsg');
+  const progressText = document.getElementById('progressText');
+  const errorMsg = document.getElementById('errorMsg');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const url = document.getElementById('auditUrl').value.trim();
+    const command = document.getElementById('auditCommand').value;
+    const apiKey = keyField ? keyField.value.trim() : '';
+
+    submitBtn.disabled = true;
+    progressMsg.classList.add('visible');
+    progressText.textContent = `Running "${command}" audit on ${url} — this may take several minutes…`;
+    errorMsg.style.display = 'none';
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['X-API-Key'] = apiKey;
+
+    try {
+      const resp = await fetch('/api/run-audit', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ url, command }),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+        throw new Error(err.detail || `HTTP ${resp.status}`);
+      }
+
+      const data = await resp.json();
+      window.location.href = `/audits/${data.id}`;
+    } catch (err) {
+      errorMsg.textContent = `Audit failed: ${err.message}`;
+      errorMsg.style.display = 'block';
+      submitBtn.disabled = false;
+      progressMsg.classList.remove('visible');
+    }
+  });
+})();
+</script>
+{% endblock %}

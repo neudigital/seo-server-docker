@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}{{ meta.url }} — Claude SEO{% endblock %}
+
+{% block content %}
+
+<a class="back-link" href="/">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 5-7 7 7 7"/></svg>
+  All audits
+</a>
+
+<div class="meta-grid">
+  <div class="meta-card">
+    <div class="label">URL</div>
+    <div class="value"><a href="{{ meta.url }}" target="_blank" rel="noopener">{{ meta.url }}</a></div>
+  </div>
+  <div class="meta-card">
+    <div class="label">Command</div>
+    <div class="value"><code>/seo {{ meta.command }}</code></div>
+  </div>
+  <div class="meta-card">
+    <div class="label">Status</div>
+    <div class="value"><span class="badge badge-{{ meta.status }}">{{ meta.status }}</span></div>
+  </div>
+  <div class="meta-card">
+    <div class="label">Started</div>
+    <div class="value ts">{{ meta.started_at[:19].replace("T", " ") }} UTC</div>
+  </div>
+  <div class="meta-card">
+    <div class="label">Duration</div>
+    <div class="value">
+      {% if meta.finished_at %}
+        <span id="duration" data-start="{{ meta.started_at }}" data-end="{{ meta.finished_at }}">—</span>
+      {% else %}
+        <span class="badge badge-running">running</span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="meta-card">
+    <div class="label">Run ID</div>
+    <div class="value mono-sm">{{ meta.id }}</div>
+  </div>
+</div>
+
+<div class="output-card">
+  <div class="output-header">
+    <span>output.txt</span>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <a class="copy-btn" href="/api/audits/{{ meta.id }}/raw" target="_blank">raw JSON</a>
+      <button class="copy-btn" id="copyBtn">Copy</button>
+    </div>
+  </div>
+  <pre id="outputPre">{{ output }}</pre>
+</div>
+
+<script>
+(function () {
+  const dur = document.getElementById('duration');
+  if (dur) {
+    const ms = new Date(dur.dataset.end) - new Date(dur.dataset.start);
+    const s = Math.round(ms / 1000);
+    dur.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  }
+
+  document.getElementById('copyBtn').addEventListener('click', () => {
+    const text = document.getElementById('outputPre').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.getElementById('copyBtn');
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+    });
+  });
+})();
+</script>
+{% endblock %}
