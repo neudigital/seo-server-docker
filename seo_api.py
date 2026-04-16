@@ -117,7 +117,26 @@ def _execute_audit(url: str, command: str) -> tuple[str, dict]:
     }
     (run_path / "meta.json").write_text(json.dumps(meta, indent=2))
 
-    prompt = f"/seo {command} {url}"
+    # In non-interactive (-p) mode Claude Code does not auto-load
+    # ~/.claude/skills/ as context, so the AI never sees the /seo skill
+    # definition and responds with "Unknown command: /seo".
+    # Fix: read the SKILL.md and inject it directly into the prompt so the
+    # model has full context regardless of how skills are loaded.
+    skill_path = Path("/root/.claude/skills/seo/SKILL.md")
+    if skill_path.exists():
+        skill_ctx = skill_path.read_text()
+        prompt = (
+            f"<skill_context>\n{skill_ctx}\n</skill_context>\n\n"
+            f"/seo {command} {url}"
+        )
+    else:
+        # Fallback: plain natural-language instruction without skill context
+        prompt = (
+            f"Perform a comprehensive SEO {command} analysis of {url}. "
+            "Use available tools (Bash, WebFetch, WebSearch) to gather real data "
+            "and provide detailed, actionable findings."
+        )
+
     cmd = [
         "claude",
         "--bare",
