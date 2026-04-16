@@ -240,9 +240,9 @@ def api_get_audit_raw(run_id: str) -> dict:
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def ui_index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
+        request,
         "index.html",
         {
-            "request": request,
             "audits": _list_audits(),
             "commands": sorted(ALLOWED_COMMANDS),
             "api_key_required": bool(API_KEY),
@@ -256,6 +256,7 @@ def ui_audit_detail(request: Request, run_id: str) -> HTMLResponse:
     output_path = _run_dir(run_id) / "output.txt"
     output = output_path.read_text() if output_path.exists() else "(no output recorded)"
     return templates.TemplateResponse(
+        request,
         "audit_detail.html",
-        {"request": request, "meta": meta, "output": output},
+        {"meta": meta, "output": output},
     )
