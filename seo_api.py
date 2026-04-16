@@ -188,12 +188,109 @@ def _execute_audit(url: str, command: str) -> tuple[str, dict]:
     return run_id, meta
 
 
-# ── Health ────────────────────────────────────────────────────────────────────
+# ── Health & debug ────────────────────────────────────────────────────────────
 
 
 @app.get("/health", tags=["system"])
 def health() -> dict:
     return {"status": "ok"}
+
+
+def _mask(val: str, show: int = 8) -> str:
+    """Show first `show` chars then asterisks, so you can confirm the right key."""
+    if not val:
+        return "(not set)"
+    return val[:show] + "*" * max(0, len(val) - show)
+
+
+@app.get("/debug", tags=["system"])
+def debug() -> dict:
+    """
+    Diagnostic endpoint — shows auth config, claude binary info, and key
+    environment variables (secrets are partially masked).
+    Never exposes full key values.
+    """
+    home = Path.home()
+    claude_json = home / ".claude.json"
+    claude_json_in_vol = home / ".claude" / ".claude.json"
+
+    # ── Claude binary ──────────────────────────────────────────────────────
+    try:
+        ver = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        claude_version = ver.stdout.strip() or ver.stderr.strip()
+        claude_found = True
+    except FileNotFoundError:
+        claude_version = "claude binary not found in PATH"
+        claude_found = False
+    except Exception as exc:
+        claude_version = f"error: {exc}"
+        claude_found = False
+
+    # ── Auth files ─────────────────────────────────────────────────────────
+    backup_dir = home / ".claude" / "backups"
+    backups = sorted(backup_dir.glob(".claude.json.backup.*")) if backup_dir.exists() else []
+
+    # ── Skills ─────────────────────────────────────────────────────────────
+    skill_path = home / ".claude" / "skills" / "seo" / "SKILL.md"
+    skills_installed = skill_path.exists()
+
+    # ── Quick claude connectivity check (tiny prompt, no tools) ────────────
+    connectivity: dict = {"status": "skipped"}
+    if claude_found:
+        try:
+            ping = subprocess.run(
+                ["claude", "--bare", "-p", "Reply with only the word PONG"],
+                capture_output=True, text=True, timeout=30,
+                env={**os.environ},
+            )
+            out = (ping.stdout + ping.stderr).strip()
+            if "PONG" in out.upper():
+                connectivity = {"status": "ok", "response": out[:120]}
+            else:
+                connectivity = {
+                    "status": "error",
+                    "stdout": ping.stdout[:300],
+                    "stderr": ping.stderr[:300],
+                    "exit_code": ping.returncode,
+                }
+        except subprocess.TimeoutExpired:
+            connectivity = {"status": "timeout"}
+        except Exception as exc:
+            connectivity = {"status": "error", "detail": str(exc)}
+
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+
+    return {
+        "claude": {
+            "found": claude_found,
+            "version": claude_version,
+            "connectivity": connectivity,
+        },
+        "auth": {
+            "ANTHROPIC_API_KEY": _mask(anthropic_key),
+            "ANTHROPIC_API_KEY_length": len(anthropic_key),
+            "claude_json_exists": claude_json.exists(),
+            "claude_json_is_symlink": claude_json.is_symlink(),
+            "claude_json_in_volume_exists": claude_json_in_vol.exists(),
+            "backup_count": len(backups),
+            "latest_backup": str(backups[-1]) if backups else None,
+        },
+        "integrations": {
+            "DATAFORSEO_USERNAME": _mask(os.environ.get("DATAFORSEO_USERNAME", ""), 4),
+            "GOOGLE_API_KEY": _mask(os.environ.get("GOOGLE_API_KEY", ""), 8),
+            "GOOGLE_APPLICATION_CREDENTIALS": os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "(not set)"),
+            "GSC_PROPERTY": os.environ.get("GSC_PROPERTY", "(not set)"),
+        },
+        "server": {
+            "AUDIT_DATA_DIR": str(AUDIT_DATA_DIR),
+            "AUDIT_TIMEOUT_SECONDS": AUDIT_TIMEOUT,
+            "API_KEY_set": bool(API_KEY),
+            "skills_installed": skills_installed,
+        },
+    }
 
 
 # ── JSON API ──────────────────────────────────────────────────────────────────
