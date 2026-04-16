@@ -99,7 +99,7 @@ def _run_dir(run_id: str) -> Path:
 
 
 def _list_audits() -> list[dict]:
-    """Return all audits sorted newest-first."""
+    """Return all audits sorted newest-first, lazily extracting health scores."""
     if not AUDIT_DATA_DIR.exists():
         return []
     audits: list[dict] = []
@@ -107,7 +107,8 @@ def _list_audits() -> list[dict]:
         meta_path = entry / "meta.json"
         if entry.is_dir() and meta_path.exists():
             try:
-                audits.append(json.loads(meta_path.read_text()))
+                meta = json.loads(meta_path.read_text())
+                audits.append(_ensure_health_score(meta, entry))
             except Exception:
                 pass
     return audits
@@ -118,6 +119,49 @@ def _get_meta(run_id: str) -> dict:
     if not meta_path.exists():
         raise HTTPException(status_code=404, detail="Audit not found")
     return json.loads(meta_path.read_text())
+
+
+# Matches "SEO Health Score: 72/100", "Health Score: 72 / 100", markdown bold, etc.
+_SCORE_RE = re.compile(
+    r'(?:seo\s+)?health\s+score[^\d]{0,10}(\d{1,3})\s*(?:/|out\s+of)\s*100',
+    re.IGNORECASE,
+)
+
+
+def _extract_health_score(run_path: Path) -> Optional[int]:
+    """
+    Scan output.txt and any .md files in the run directory for a health score
+    line like 'SEO Health Score: 72/100'.  Returns the integer or None.
+    """
+    candidates = [run_path / "output.txt", *sorted(run_path.glob("*.md"))]
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            m = _SCORE_RE.search(path.read_text(errors="replace"))
+            if m:
+                score = int(m.group(1))
+                if 0 <= score <= 100:
+                    return score
+        except Exception:
+            pass
+    return None
+
+
+def _ensure_health_score(meta: dict, run_path: Path) -> dict:
+    """
+    If the audit is finished and health_score is not yet in meta, try to
+    extract it from output files, persist the result, and return updated meta.
+    """
+    if "health_score" not in meta and meta.get("status") not in ("running", None):
+        score = _extract_health_score(run_path)
+        if score is not None:
+            meta["health_score"] = score
+            try:
+                (run_path / "meta.json").write_text(json.dumps(meta, indent=2))
+            except Exception:
+                pass
+    return meta
 
 
 def _build_prompt(command: str, url: str) -> str:
@@ -291,6 +335,11 @@ def _audit_worker(run_id: str, run_path: Path, meta: dict, cmd: list) -> None:
         meta.update({"status": "error", "exit_code": -1,
                      "finished_at": datetime.now(timezone.utc).isoformat()})
     finally:
+        # Extract health score from output before persisting meta
+        if meta.get("status") != "running":
+            score = _extract_health_score(run_path)
+            if score is not None:
+                meta["health_score"] = score
         (run_path / "meta.json").write_text(json.dumps(meta, indent=2))
         _running_jobs.pop(run_id, None)
 
@@ -602,8 +651,9 @@ def api_list_audits() -> list[dict]:
 @app.get("/api/audits/{run_id}", tags=["audits"])
 def api_get_audit(run_id: str) -> dict:
     """Fetch metadata and a 2 000-character preview of the audit output."""
-    meta = _get_meta(run_id)
-    output_path = _run_dir(run_id) / "output.txt"
+    run_path = _run_dir(run_id)
+    meta = _ensure_health_score(_get_meta(run_id), run_path)
+    output_path = run_path / "output.txt"
     preview = ""
     if output_path.exists():
         preview = output_path.read_text()[:2000]
@@ -682,8 +732,9 @@ def ui_index(request: Request) -> HTMLResponse:
 
 @app.get("/audits/{run_id}", response_class=HTMLResponse, include_in_schema=False)
 def ui_audit_detail(request: Request, run_id: str) -> HTMLResponse:
-    meta = _get_meta(run_id)
-    output_path = _run_dir(run_id) / "output.txt"
+    run_path = _run_dir(run_id)
+    meta = _ensure_health_score(_get_meta(run_id), run_path)
+    output_path = run_path / "output.txt"
     output = output_path.read_text() if output_path.exists() else "(no output recorded)"
     return templates.TemplateResponse(
         request,

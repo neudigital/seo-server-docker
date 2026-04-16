@@ -31,6 +31,19 @@
     <div class="label">Started</div>
     <div class="value ts">{{ meta.started_at[:19].replace("T", " ") }} UTC</div>
   </div>
+  {% if meta.health_score is defined %}
+  {%- set sc = meta.health_score -%}
+  <div class="meta-card meta-card-score score-{{ 'good' if sc >= 70 else ('ok' if sc >= 40 else 'poor') }}">
+    <div class="label">Health Score</div>
+    <div class="value score-large score-{{ 'good' if sc >= 70 else ('ok' if sc >= 40 else 'poor') }}">
+      {{ sc }}<span class="score-denom">/100</span>
+    </div>
+    <div class="score-bar-wrap">
+      <div class="score-bar score-bar-{{ 'good' if sc >= 70 else ('ok' if sc >= 40 else 'poor') }}"
+           style="width:{{ sc }}%"></div>
+    </div>
+  </div>
+  {% endif %}
   <div class="meta-card">
     <div class="label">Duration</div>
     <div class="value">

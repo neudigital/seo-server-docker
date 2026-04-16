@@ -568,6 +568,70 @@ nav a.nav-link:hover { color: #fff; }
 .download-btn { gap: 0.3rem; }
 .download-btn svg { flex-shrink: 0; }
 
+/* ── Health score ────────────────────────────────────────────────────────── */
+
+/* Pill used in the list table */
+.score-cell { white-space: nowrap; }
+
+.score-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+  padding: .2rem .6rem;
+  border-radius: 9999px;
+  font-size: .8rem;
+  font-weight: 700;
+  font-family: var(--mono);
+  border: 1px solid transparent;
+}
+
+.score-denom {
+  font-size: .65em;
+  font-weight: 500;
+  opacity: .75;
+}
+
+.score-good { background: #dcfce7; color: #15803d; border-color: #bbf7d0; }
+.score-ok   { background: #fef9c3; color: #a16207; border-color: #fde68a; }
+.score-poor { background: #fee2e2; color: #b91c1c; border-color: #fecaca; }
+
+/* Large score in the detail page meta card */
+.meta-card-score { border-color: transparent; }
+.meta-card-score.score-good { background: #f0fdf4; border-color: #bbf7d0; }
+.meta-card-score.score-ok   { background: #fefce8; border-color: #fde68a; }
+.meta-card-score.score-poor { background: #fff1f2; border-color: #fecaca; }
+
+.score-large {
+  font-size: 1.6rem;
+  font-weight: 800;
+  font-family: var(--mono);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.score-large .score-denom {
+  font-size: .5em;
+  font-weight: 600;
+}
+
+.score-bar-wrap {
+  margin-top: .5rem;
+  height: 5px;
+  background: rgba(0,0,0,.08);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.score-bar {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width .4s ease;
+}
+
+.score-bar-good { background: #22c55e; }
+.score-bar-ok   { background: #eab308; }
+.score-bar-poor { background: #ef4444; }
+
 /* ── Cost display ────────────────────────────────────────────────────────── */
 
 .meta-card-cost { border-color: #bbf7d0; background: #f0fdf4; }

@@ -50,6 +50,7 @@
       <th>URL</th>
       <th>Command</th>
       <th>Status</th>
+      <th>Score</th>
       <th>Started</th>
       <th>Duration</th>
       <th>Cost</th>
@@ -63,6 +64,16 @@
       <td><code>{{ a.command }}</code></td>
       <td>
         <span class="badge badge-{{ a.status }}">{{ a.status }}</span>
+      </td>
+      <td class="score-cell">
+        {% if a.health_score is defined %}
+          {%- set sc = a.health_score -%}
+          <span class="score-pill score-{{ 'good' if sc >= 70 else ('ok' if sc >= 40 else 'poor') }}">
+            {{ sc }}<span class="score-denom">/100</span>
+          </span>
+        {% else %}
+          <span class="muted-dash">—</span>
+        {% endif %}
       </td>
       <td class="ts-cell">{{ a.started_at[:19].replace("T", " ") }} UTC</td>
       <td>
