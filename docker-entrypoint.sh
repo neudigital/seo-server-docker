@@ -9,6 +9,17 @@
 #
 set -euo pipefail
 
+# ── Restore claude-seo skills if volume mount wiped them ─────────────────────
+# When /root/.claude is a Docker named volume it starts empty, erasing the
+# skills installed during the image build.  We keep a snapshot at
+# /opt/claude-default and restore from it on first start (or any time the
+# skills directory is missing).
+if [ ! -d "${HOME}/.claude/skills/seo" ] && [ -d /opt/claude-default ]; then
+    echo "→ Restoring claude-seo skills from image snapshot…"
+    cp -r /opt/claude-default/. "${HOME}/.claude/"
+    echo "  ✓ Skills restored"
+fi
+
 SETTINGS_FILE="${HOME}/.claude/settings.json"
 GOOGLE_CONFIG_DIR="${HOME}/.config/claude-seo"
 GOOGLE_CONFIG_FILE="${GOOGLE_CONFIG_DIR}/google-api.json"

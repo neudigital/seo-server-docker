@@ -51,7 +51,10 @@ RUN git clone --depth 1 --branch "${CLAUDE_SEO_TAG}" \
     # Pre-warm dataforseo-mcp-server package (avoids first-run npm fetch delay)
     && npx --yes --package=dataforseo-mcp-server -- node -e "" >/dev/null 2>&1 || true \
     # Install Playwright browsers used by seo-visual skill
-    && python3 -m playwright install chromium --with-deps 2>/dev/null || true
+    && python3 -m playwright install chromium --with-deps 2>/dev/null || true \
+    # Snapshot the installed skills to a non-volume path so the entrypoint can
+    # restore them if /root/.claude is overwritten by a Docker volume mount.
+    && cp -r /root/.claude /opt/claude-default
 
 # ── 4. FastAPI app ────────────────────────────────────────────────────────────
 COPY requirements.txt /app/requirements.txt
