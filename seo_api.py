@@ -164,18 +164,33 @@ def _ensure_health_score(meta: dict, run_path: Path) -> dict:
     return meta
 
 
+_FILE_OUTPUT_INSTRUCTIONS = """
+
+<output_requirements>
+CRITICAL — you MUST write your findings to files using the Write tool. Do not skip this step
+or claim scripts are unavailable. Write the files directly yourself:
+
+1. Write the complete audit report to: FULL-AUDIT-REPORT.md
+2. Write the prioritized action plan to: ACTION-PLAN.md
+
+Both files are required. Use the Write tool for each one. Do not ask whether to create them —
+always create them unconditionally before finishing.
+</output_requirements>"""
+
+
 def _build_prompt(command: str, url: str) -> str:
-    """Inject the SKILL.md as context so claude -p understands /seo commands."""
+    """Inject SKILL.md context + mandatory file-output instructions."""
     skill_path = Path("/root/.claude/skills/seo/SKILL.md")
     if skill_path.exists():
         return (
             f"<skill_context>\n{skill_path.read_text()}\n</skill_context>\n\n"
             f"/seo {command} {url}"
+            f"{_FILE_OUTPUT_INSTRUCTIONS}"
         )
     return (
         f"Perform a comprehensive SEO {command} analysis of {url}. "
         "Use available tools (Bash, WebFetch, WebSearch) to gather real data "
-        "and provide detailed, actionable findings."
+        f"and provide detailed, actionable findings.{_FILE_OUTPUT_INSTRUCTIONS}"
     )
 
 
