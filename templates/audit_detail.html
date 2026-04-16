@@ -73,6 +73,24 @@
   </div>
 </div>
 
+{% if meta.status in ("error", "rate_limited") %}
+<div class="alert alert-{{ 'rate-limit' if meta.status == 'rate_limited' else 'error' }} retry-banner">
+  {% if meta.status == "rate_limited" %}
+  <div>
+    <strong>Rate limit hit</strong> — Anthropic's API rejected a request because too many tokens
+    were sent per minute. This happens when multiple subagents run in parallel.
+    The prompt now instructs Claude to run subagents sequentially, so retrying should succeed.
+  </div>
+  {% else %}
+  <div><strong>Audit failed</strong> — you can retry it with the same URL and command.</div>
+  {% endif %}
+  <button class="retry-btn" id="retryBtn" onclick="retryAudit()">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/></svg>
+    Retry audit
+  </button>
+</div>
+{% endif %}
+
 {# File tab bar — populated by JS once extra files are discovered #}
 <div class="file-tab-bar" id="fileTabBar" style="display:none">
   <button class="file-tab active" data-key="output" onclick="switchTab('output', this)">
@@ -130,6 +148,19 @@
   let showingRaw     = false;
   // Cache fetched file contents { filename: text }
   const fileCache    = {};
+
+  // ── Retry failed audit ────────────────────────────────────────────────
+  window.retryAudit = function () {
+    const btn = document.getElementById('retryBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+    fetch(`/api/audits/${runId}/retry`, { method: 'POST' })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => { window.location.href = `/audits/${data.id}`; })
+      .catch(err => {
+        if (btn) { btn.disabled = false; btn.innerHTML = '↺ Retry audit'; }
+        alert(`Retry failed: ${err}`);
+      });
+  };
 
   // ── Static duration ───────────────────────────────────────────────────
   if (durEl) {

@@ -166,6 +166,12 @@ def _ensure_health_score(meta: dict, run_path: Path) -> dict:
 
 _FILE_OUTPUT_INSTRUCTIONS = """
 
+<execution_strategy>
+Run any specialist subagents SEQUENTIALLY — one at a time, not in parallel. This is required
+to stay within API rate limits. If you encounter an HTTP 429 rate-limit error, pause for
+60 seconds then retry that specific request before continuing.
+</execution_strategy>
+
 <output_requirements>
 CRITICAL — you MUST write your findings to files using the Write tool. Do not skip this step
 or claim scripts are unavailable. Write the files directly yourself:
@@ -176,6 +182,13 @@ or claim scripts are unavailable. Write the files directly yourself:
 Both files are required. Use the Write tool for each one. Do not ask whether to create them —
 always create them unconditionally before finishing.
 </output_requirements>"""
+
+_RATE_LIMIT_PHRASES = ("rate limit", "429", "tokens per minute", "request rejected")
+
+
+def _is_rate_limited(text: str) -> bool:
+    low = text.lower()
+    return any(p in low for p in _RATE_LIMIT_PHRASES)
 
 
 def _build_prompt(command: str, url: str) -> str:
@@ -339,9 +352,21 @@ def _audit_worker(run_id: str, run_path: Path, meta: dict, cmd: list) -> None:
         if proc.returncode != 0 and stderr:
             with open(output_path, "a") as f:
                 f.write(f"\n--- stderr ---\n{stderr[:4000]}\n")
+
+        # Determine final status — detect rate-limit errors in combined output
+        if proc.returncode == 0:
+            final_status = "success"
+        else:
+            combined = stderr
+            try:
+                combined += output_path.read_text(errors="replace")
+            except Exception:
+                pass
+            final_status = "rate_limited" if _is_rate_limited(combined) else "error"
+
         meta.update({
             "finished_at": datetime.now(timezone.utc).isoformat(),
-            "status": "success" if proc.returncode == 0 else "error",
+            "status": final_status,
             "exit_code": proc.returncode,
         })
     except Exception as exc:
@@ -655,6 +680,16 @@ def audit_stream(run_id: str) -> StreamingResponse:
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                  "Connection": "keep-alive"},
     )
+
+
+@app.post("/api/audits/{run_id}/retry", tags=["audits"], dependencies=[Depends(require_api_key)])
+def api_retry_audit(run_id: str) -> JSONResponse:
+    """Re-run a failed or rate-limited audit with the same URL and command."""
+    meta = _get_meta(run_id)
+    if meta.get("status") == "running":
+        raise HTTPException(status_code=409, detail="Audit is still running")
+    new_id, new_meta = _start_audit(meta["url"], meta["command"])
+    return JSONResponse({"id": new_id, "status": new_meta["status"]}, status_code=202)
 
 
 @app.get("/api/audits", tags=["audits"])
