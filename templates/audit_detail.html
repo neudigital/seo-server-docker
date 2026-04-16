@@ -1,13 +1,17 @@
 {% extends "base.html" %}
 {% block title %}{{ meta.url }} — Claude SEO{% endblock %}
 
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+{% endblock %}
+
 {% block content %}
 <a class="back-link" href="/">
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 5-7 7 7 7"/></svg>
   All audits
 </a>
 
-<div class="meta-grid" id="metaGrid">
+<div class="meta-grid">
   <div class="meta-card">
     <div class="label">URL</div>
     <div class="value"><a href="{{ meta.url }}" target="_blank" rel="noopener">{{ meta.url }}</a></div>
@@ -20,9 +24,7 @@
     <div class="label">Status</div>
     <div class="value">
       <span class="badge badge-{{ meta.status }}" id="statusBadge">{{ meta.status }}</span>
-      {% if meta.status == "running" %}
-      <span class="live-dot" title="Live"></span>
-      {% endif %}
+      {% if meta.status == "running" %}<span class="live-dot" title="Live"></span>{% endif %}
     </div>
   </div>
   <div class="meta-card">
@@ -36,9 +38,7 @@
         <span id="liveDuration">running…</span>
       {% elif meta.finished_at %}
         <span id="duration" data-start="{{ meta.started_at }}" data-end="{{ meta.finished_at }}">—</span>
-      {% else %}
-        —
-      {% endif %}
+      {% else %}—{% endif %}
     </div>
   </div>
   {% if meta.cost_usd is defined %}
@@ -49,9 +49,7 @@
     <div class="cost-tokens">
       <span title="Input tokens">↓ {{ "{:,}".format(meta.usage.input_tokens) }}</span>
       <span title="Output tokens">↑ {{ "{:,}".format(meta.usage.output_tokens) }}</span>
-      {% if meta.usage.cache_read_tokens %}
-      <span title="Cache read tokens" class="cache-tokens">⚡ {{ "{:,}".format(meta.usage.cache_read_tokens) }}</span>
-      {% endif %}
+      {% if meta.usage.cache_read_tokens %}<span title="Cache read" class="cache-tokens">⚡ {{ "{:,}".format(meta.usage.cache_read_tokens) }}</span>{% endif %}
     </div>
     {% endif %}
   </div>
@@ -62,57 +60,97 @@
   </div>
 </div>
 
-<div class="output-card">
+<div class="output-card" id="outputCard">
   <div class="output-header">
-    <span id="outputLabel">{% if meta.status == "running" %}live output{% else %}output.txt{% endif %}</span>
+    <span id="outputLabel">
+      {% if meta.status == "running" %}live output{% else %}report{% endif %}
+    </span>
     <div style="display:flex;gap:.5rem;align-items:center">
       {% if meta.status != "running" %}
-      <a class="copy-btn" href="/api/audits/{{ meta.id }}/raw" target="_blank">raw JSON</a>
+      <button class="copy-btn" id="viewToggle">Raw</button>
+      <a class="copy-btn" href="/api/audits/{{ meta.id }}/raw" target="_blank">JSON</a>
       {% endif %}
       <button class="copy-btn" id="copyBtn">Copy</button>
     </div>
   </div>
-  <pre id="outputPre">{% if meta.status != "running" %}{{ output }}{% endif %}</pre>
+
+  {# Rendered markdown — shown by default when audit is complete #}
+  <div id="renderedOutput" class="markdown-body"
+       style="{% if meta.status == 'running' %}display:none{% endif %}"></div>
+
+  {# Raw terminal — always used while live; toggle target when complete #}
+  <pre id="outputPre"
+       style="{% if meta.status != 'running' %}display:none{% endif %}">{% if meta.status != "running" %}{{ output }}{% endif %}</pre>
 </div>
 
 <script>
 (function () {
-  const runId    = {{ meta.id | tojson }};
-  const isLive   = {{ (meta.status == "running") | tojson }};
+  const runId     = {{ meta.id | tojson }};
+  const isLive    = {{ (meta.status == "running") | tojson }};
   const startedAt = new Date({{ meta.started_at | tojson }});
 
-  // ── Static duration (already-finished audits) ──────────────────────────
-  const durEl = document.getElementById('duration');
+  const pre          = document.getElementById('outputPre');
+  const rendered     = document.getElementById('renderedOutput');
+  const outputCard   = document.getElementById('outputCard');
+  const statusBadge  = document.getElementById('statusBadge');
+  const outputLabel  = document.getElementById('outputLabel');
+  const viewToggle   = document.getElementById('viewToggle');
+  const copyBtn      = document.getElementById('copyBtn');
+  const liveDurEl    = document.getElementById('liveDuration');
+  const durEl        = document.getElementById('duration');
+
+  // ── Static duration ────────────────────────────────────────────────────
   if (durEl) {
     const ms = new Date(durEl.dataset.end) - new Date(durEl.dataset.start);
-    const s = Math.round(ms / 1000);
+    const s  = Math.round(ms / 1000);
     durEl.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
   }
 
+  // ── Render markdown helper ─────────────────────────────────────────────
+  function renderMarkdown() {
+    const rawText = pre.textContent;
+    if (!rawText.trim()) return;
+    rendered.innerHTML = marked.parse(rawText, { breaks: true, gfm: true });
+    rendered.style.display = 'block';
+    pre.style.display      = 'none';
+    outputCard.classList.add('output-card-light');
+    outputLabel.textContent = 'report';
+    if (viewToggle) viewToggle.style.display = 'inline-block';
+  }
+
   // ── Copy button ────────────────────────────────────────────────────────
-  document.getElementById('copyBtn').addEventListener('click', () => {
-    navigator.clipboard.writeText(document.getElementById('outputPre').textContent).then(() => {
-      const btn = document.getElementById('copyBtn');
-      btn.textContent = 'Copied!';
-      setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+  copyBtn.addEventListener('click', () => {
+    const text = pre.textContent || rendered.textContent;
+    navigator.clipboard.writeText(text).then(() => {
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
     });
   });
 
-  if (!isLive) return;
+  // ── Raw / Rendered toggle ──────────────────────────────────────────────
+  let showingRaw = false;
+  if (viewToggle) {
+    viewToggle.addEventListener('click', () => {
+      showingRaw = !showingRaw;
+      rendered.style.display      = showingRaw ? 'none'         : 'block';
+      pre.style.display           = showingRaw ? 'block'        : 'none';
+      outputCard.classList.toggle('output-card-light', !showingRaw);
+      viewToggle.textContent      = showingRaw ? 'Rendered'     : 'Raw';
+    });
+  }
+
+  // ── Immediately render if the audit is already complete ────────────────
+  if (!isLive) {
+    renderMarkdown();
+    return;
+  }
 
   // ── Live streaming via SSE ─────────────────────────────────────────────
-  const pre         = document.getElementById('outputPre');
-  const statusBadge = document.getElementById('statusBadge');
-  const liveDurEl   = document.getElementById('liveDuration');
-  const outputLabel = document.getElementById('outputLabel');
-  let autoScroll    = true;
-
-  // Track scroll intent — stop auto-scrolling if user scrolls up
+  let autoScroll = true;
   pre.addEventListener('scroll', () => {
     autoScroll = pre.scrollHeight - pre.scrollTop <= pre.clientHeight + 80;
   });
 
-  // Live elapsed timer
   const liveDurTimer = setInterval(() => {
     const s = Math.round((Date.now() - startedAt) / 1000);
     if (liveDurEl) liveDurEl.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
@@ -131,26 +169,35 @@
     clearInterval(liveDurTimer);
 
     const data = JSON.parse(e.data);
-    const st = data.status || 'unknown';
+    const st   = data.status || 'unknown';
 
-    // Update badge
-    statusBadge.className = `badge badge-${st}`;
+    statusBadge.className   = `badge badge-${st}`;
     statusBadge.textContent = st;
-    // Remove live dot
     document.querySelectorAll('.live-dot').forEach(el => el.remove());
-    // Update labels
-    outputLabel.textContent = 'output.txt';
+
     if (liveDurEl) {
       const s = Math.round((Date.now() - startedAt) / 1000);
       liveDurEl.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
-      liveDurEl.id = '';  // stop the timer updating it
     }
+
+    // Fetch final meta to update cost card
+    fetch(`/api/audits/${runId}`)
+      .then(r => r.json())
+      .then(m => {
+        if (m.cost_usd != null) {
+          // Reload the page so the cost card appears cleanly
+          window.location.reload();
+        } else {
+          // No cost data — just switch to rendered view in place
+          renderMarkdown();
+        }
+      })
+      .catch(() => renderMarkdown());
   });
 
   source.onerror = () => {
     source.close();
     clearInterval(liveDurTimer);
-    // Reload to get the final static view
     setTimeout(() => window.location.reload(), 2000);
   };
 })();
