@@ -48,9 +48,10 @@ services:
     volumes:
       # Persist audit history across container restarts and updates
       - audit-data:/data/audits
-      # Persist Claude Code login state (ANTHROPIC_API_KEY is preferred,
-      # but this keeps any cached tokens or settings changes)
+      # Persist Claude Code state directory (skills, agents, settings.json)
       - claude-config:/root/.claude
+      # Persist Claude Code auth config — stored at ~/.claude.json (outside ~/.claude/)
+      - claude-json:/root/.claude.json
       # Persist Google OAuth token and claude-seo google-api.json
       - google-config:/root/.config/claude-seo
       # ── Service account JSON (if using GSC/GA4) ──────────────────────────
@@ -65,4 +66,5 @@ services:
 volumes:
   audit-data:
   claude-config:
+  claude-json:
   google-config:

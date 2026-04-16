@@ -20,6 +20,61 @@ if [ ! -d "${HOME}/.claude/skills/seo" ] && [ -d /opt/claude-default ]; then
     echo "  ✓ Skills restored"
 fi
 
+# ── Restore ~/.claude.json if missing ────────────────────────────────────────
+# Claude Code stores its auth config at ~/.claude.json (outside ~/.claude/).
+# That file is NOT inside our volume mount, so it disappears on every restart.
+# Strategy (in priority order):
+#   1. ANTHROPIC_API_KEY env var  →  write a minimal config from it
+#   2. Backup file left by Claude Code  →  restore it
+CLAUDE_JSON="${HOME}/.claude.json"
+if [ ! -f "${CLAUDE_JSON}" ]; then
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        echo "→ Writing ${CLAUDE_JSON} from ANTHROPIC_API_KEY…"
+        python3 - <<PYEOF
+import json, os
+cfg = {
+    "primaryApiKey": os.environ["ANTHROPIC_API_KEY"],
+    "hasCompletedOnboarding": True,
+    "hasAgreedToTerms": True,
+}
+with open("${CLAUDE_JSON}", "w") as f:
+    json.dump(cfg, f, indent=2)
+print("  ✓ ~/.claude.json written")
+PYEOF
+    else
+        # Fall back to the latest backup Claude Code left behind
+        BACKUP=$(ls -t "${HOME}/.claude/backups/.claude.json.backup."* 2>/dev/null | head -1)
+        if [ -n "${BACKUP}" ]; then
+            echo "→ Restoring ${CLAUDE_JSON} from backup ${BACKUP}…"
+            cp "${BACKUP}" "${CLAUDE_JSON}"
+            echo "  ✓ Restored"
+        else
+            echo "⚠  No ANTHROPIC_API_KEY and no backup found."
+            echo "   Set ANTHROPIC_API_KEY in your environment or log in interactively first."
+        fi
+    fi
+else
+    # File exists — make sure the API key in it matches the current env var
+    # (handles key rotation without requiring a manual volume update)
+    if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        python3 - <<PYEOF
+import json, os
+path = "${CLAUDE_JSON}"
+key  = os.environ["ANTHROPIC_API_KEY"]
+try:
+    with open(path) as f:
+        cfg = json.load(f)
+    if cfg.get("primaryApiKey") != key:
+        cfg["primaryApiKey"] = key
+        with open(path, "w") as f:
+            json.dump(cfg, f, indent=2)
+        print("  ✓ ~/.claude.json API key updated")
+except Exception:
+    pass
+PYEOF
+    fi
+fi
+
 SETTINGS_FILE="${HOME}/.claude/settings.json"
 GOOGLE_CONFIG_DIR="${HOME}/.config/claude-seo"
 GOOGLE_CONFIG_FILE="${GOOGLE_CONFIG_DIR}/google-api.json"
