@@ -2,13 +2,12 @@
 {% block title %}{{ meta.url }} — Claude SEO{% endblock %}
 
 {% block content %}
-
 <a class="back-link" href="/">
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 5-7 7 7 7"/></svg>
   All audits
 </a>
 
-<div class="meta-grid">
+<div class="meta-grid" id="metaGrid">
   <div class="meta-card">
     <div class="label">URL</div>
     <div class="value"><a href="{{ meta.url }}" target="_blank" rel="noopener">{{ meta.url }}</a></div>
@@ -19,7 +18,12 @@
   </div>
   <div class="meta-card">
     <div class="label">Status</div>
-    <div class="value"><span class="badge badge-{{ meta.status }}">{{ meta.status }}</span></div>
+    <div class="value">
+      <span class="badge badge-{{ meta.status }}" id="statusBadge">{{ meta.status }}</span>
+      {% if meta.status == "running" %}
+      <span class="live-dot" title="Live"></span>
+      {% endif %}
+    </div>
   </div>
   <div class="meta-card">
     <div class="label">Started</div>
@@ -28,10 +32,12 @@
   <div class="meta-card">
     <div class="label">Duration</div>
     <div class="value">
-      {% if meta.finished_at %}
+      {% if meta.status == "running" %}
+        <span id="liveDuration">running…</span>
+      {% elif meta.finished_at %}
         <span id="duration" data-start="{{ meta.started_at }}" data-end="{{ meta.finished_at }}">—</span>
       {% else %}
-        <span class="badge badge-running">running</span>
+        —
       {% endif %}
     </div>
   </div>
@@ -43,32 +49,95 @@
 
 <div class="output-card">
   <div class="output-header">
-    <span>output.txt</span>
+    <span id="outputLabel">{% if meta.status == "running" %}live output{% else %}output.txt{% endif %}</span>
     <div style="display:flex;gap:.5rem;align-items:center">
+      {% if meta.status != "running" %}
       <a class="copy-btn" href="/api/audits/{{ meta.id }}/raw" target="_blank">raw JSON</a>
+      {% endif %}
       <button class="copy-btn" id="copyBtn">Copy</button>
     </div>
   </div>
-  <pre id="outputPre">{{ output }}</pre>
+  <pre id="outputPre">{% if meta.status != "running" %}{{ output }}{% endif %}</pre>
 </div>
 
 <script>
 (function () {
-  const dur = document.getElementById('duration');
-  if (dur) {
-    const ms = new Date(dur.dataset.end) - new Date(dur.dataset.start);
+  const runId    = {{ meta.id | tojson }};
+  const isLive   = {{ (meta.status == "running") | tojson }};
+  const startedAt = new Date({{ meta.started_at | tojson }});
+
+  // ── Static duration (already-finished audits) ──────────────────────────
+  const durEl = document.getElementById('duration');
+  if (durEl) {
+    const ms = new Date(durEl.dataset.end) - new Date(durEl.dataset.start);
     const s = Math.round(ms / 1000);
-    dur.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+    durEl.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
   }
 
+  // ── Copy button ────────────────────────────────────────────────────────
   document.getElementById('copyBtn').addEventListener('click', () => {
-    const text = document.getElementById('outputPre').textContent;
-    navigator.clipboard.writeText(text).then(() => {
+    navigator.clipboard.writeText(document.getElementById('outputPre').textContent).then(() => {
       const btn = document.getElementById('copyBtn');
       btn.textContent = 'Copied!';
       setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
     });
   });
+
+  if (!isLive) return;
+
+  // ── Live streaming via SSE ─────────────────────────────────────────────
+  const pre         = document.getElementById('outputPre');
+  const statusBadge = document.getElementById('statusBadge');
+  const liveDurEl   = document.getElementById('liveDuration');
+  const outputLabel = document.getElementById('outputLabel');
+  let autoScroll    = true;
+
+  // Track scroll intent — stop auto-scrolling if user scrolls up
+  pre.addEventListener('scroll', () => {
+    autoScroll = pre.scrollHeight - pre.scrollTop <= pre.clientHeight + 80;
+  });
+
+  // Live elapsed timer
+  const liveDurTimer = setInterval(() => {
+    const s = Math.round((Date.now() - startedAt) / 1000);
+    if (liveDurEl) liveDurEl.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  }, 1000);
+
+  const source = new EventSource(`/audits/${runId}/stream`);
+
+  source.onmessage = (e) => {
+    const chunk = JSON.parse(e.data);
+    pre.textContent += chunk;
+    if (autoScroll) pre.scrollTop = pre.scrollHeight;
+  };
+
+  source.addEventListener('done', (e) => {
+    source.close();
+    clearInterval(liveDurTimer);
+
+    const data = JSON.parse(e.data);
+    const st = data.status || 'unknown';
+
+    // Update badge
+    statusBadge.className = `badge badge-${st}`;
+    statusBadge.textContent = st;
+    // Remove live dot
+    document.querySelectorAll('.live-dot').forEach(el => el.remove());
+    // Update labels
+    outputLabel.textContent = 'output.txt';
+    if (liveDurEl) {
+      const s = Math.round((Date.now() - startedAt) / 1000);
+      liveDurEl.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+      liveDurEl.id = '';  // stop the timer updating it
+    }
+  });
+
+  source.onerror = () => {
+    source.close();
+    clearInterval(liveDurTimer);
+    // Reload to get the final static view
+    setTimeout(() => window.location.reload(), 2000);
+  };
 })();
 </script>
 {% endblock %}

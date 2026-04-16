@@ -11,13 +11,15 @@ import os
 import re
 import subprocess
 import threading
+import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -46,9 +48,32 @@ ALLOWED_COMMANDS = frozenset(
     }
 )
 
+# Tracks currently-running claude subprocesses keyed by run_id
+_running_jobs: dict[str, subprocess.Popen] = {}
+
+
 # ── App ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Claude SEO API", version="1.0.0", docs_url="/api/docs")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # On startup, mark any audits left in "running" state (from a previous
+    # container run) as errored so the UI does not show them as live forever.
+    if AUDIT_DATA_DIR.exists():
+        for d in AUDIT_DATA_DIR.iterdir():
+            meta_path = d / "meta.json"
+            if d.is_dir() and meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text())
+                    if meta.get("status") == "running":
+                        meta.update({"status": "error", "exit_code": -1,
+                                     "finished_at": datetime.now(timezone.utc).isoformat()})
+                        meta_path.write_text(json.dumps(meta, indent=2))
+                except Exception:
+                    pass
+    yield
+
+
+app = FastAPI(title="Claude SEO API", version="1.0.0", docs_url="/api/docs", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -95,10 +120,66 @@ def _get_meta(run_id: str) -> dict:
     return json.loads(meta_path.read_text())
 
 
-def _execute_audit(url: str, command: str) -> tuple[str, dict]:
+def _build_prompt(command: str, url: str) -> str:
+    """Inject the SKILL.md as context so claude -p understands /seo commands."""
+    skill_path = Path("/root/.claude/skills/seo/SKILL.md")
+    if skill_path.exists():
+        return (
+            f"<skill_context>\n{skill_path.read_text()}\n</skill_context>\n\n"
+            f"/seo {command} {url}"
+        )
+    return (
+        f"Perform a comprehensive SEO {command} analysis of {url}. "
+        "Use available tools (Bash, WebFetch, WebSearch) to gather real data "
+        "and provide detailed, actionable findings."
+    )
+
+
+def _audit_worker(run_id: str, run_path: Path, meta: dict, cmd: list) -> None:
     """
-    Invoke the claude CLI in non-interactive mode and persist the result.
-    Returns (run_id, meta).  Blocks until the process finishes or times out.
+    Background thread: runs claude CLI, streams stdout/stderr directly to
+    output.txt so the SSE endpoint can tail it in real time.
+    """
+    output_path = run_path / "output.txt"
+    try:
+        with open(output_path, "w", buffering=1) as outfile:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=outfile,
+                stderr=subprocess.STDOUT,   # merge stderr so it shows in the stream
+                text=True,
+                cwd=str(run_path),
+                env={**os.environ},
+            )
+            _running_jobs[run_id] = proc
+            try:
+                proc.wait(timeout=AUDIT_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                outfile.write(f"\n[Audit timed out after {AUDIT_TIMEOUT}s]\n")
+                meta.update({"status": "timeout", "exit_code": None,
+                             "finished_at": datetime.now(timezone.utc).isoformat()})
+                return
+        meta.update({
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "status": "success" if proc.returncode == 0 else "error",
+            "exit_code": proc.returncode,
+        })
+    except Exception as exc:
+        with open(output_path, "a") as f:
+            f.write(f"\n[Internal error: {exc}]\n")
+        meta.update({"status": "error", "exit_code": -1,
+                     "finished_at": datetime.now(timezone.utc).isoformat()})
+    finally:
+        (run_path / "meta.json").write_text(json.dumps(meta, indent=2))
+        _running_jobs.pop(run_id, None)
+
+
+def _start_audit(url: str, command: str) -> tuple[str, dict]:
+    """
+    Launch the audit in a background thread.  Returns (run_id, meta)
+    immediately — the caller does NOT wait for the audit to finish.
     """
     run_id = (
         datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -109,84 +190,19 @@ def _execute_audit(url: str, command: str) -> tuple[str, dict]:
     run_path.mkdir(parents=True, exist_ok=True)
 
     meta: dict = {
-        "id": run_id,
-        "url": url,
-        "command": command,
+        "id": run_id, "url": url, "command": command,
         "started_at": datetime.now(timezone.utc).isoformat(),
-        "finished_at": None,
-        "status": "running",
-        "exit_code": None,
+        "finished_at": None, "status": "running", "exit_code": None,
     }
     (run_path / "meta.json").write_text(json.dumps(meta, indent=2))
 
-    # In non-interactive (-p) mode Claude Code does not auto-load
-    # ~/.claude/skills/ as context, so the AI never sees the /seo skill
-    # definition and responds with "Unknown command: /seo".
-    # Fix: read the SKILL.md and inject it directly into the prompt so the
-    # model has full context regardless of how skills are loaded.
-    skill_path = Path("/root/.claude/skills/seo/SKILL.md")
-    if skill_path.exists():
-        skill_ctx = skill_path.read_text()
-        prompt = (
-            f"<skill_context>\n{skill_ctx}\n</skill_context>\n\n"
-            f"/seo {command} {url}"
-        )
-    else:
-        # Fallback: plain natural-language instruction without skill context
-        prompt = (
-            f"Perform a comprehensive SEO {command} analysis of {url}. "
-            "Use available tools (Bash, WebFetch, WebSearch) to gather real data "
-            "and provide detailed, actionable findings."
-        )
-
     cmd = [
-        "claude",
-        "--bare",
-        "-p",
-        prompt,
-        "--allowedTools",
-        "Bash,Read,Write,WebFetch,WebSearch",
+        "claude", "--bare", "-p", _build_prompt(command, url),
+        "--allowedTools", "Bash,Read,Write,WebFetch,WebSearch",
     ]
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=AUDIT_TIMEOUT,
-            cwd=str(run_path),
-        )
-        output = result.stdout
-        if result.returncode != 0 and result.stderr:
-            output += "\n--- stderr ---\n" + result.stderr[:8000]
-        meta.update(
-            {
-                "finished_at": datetime.now(timezone.utc).isoformat(),
-                "status": "success" if result.returncode == 0 else "error",
-                "exit_code": result.returncode,
-            }
-        )
-    except subprocess.TimeoutExpired:
-        output = f"[Audit timed out after {AUDIT_TIMEOUT} seconds]"
-        meta.update(
-            {
-                "finished_at": datetime.now(timezone.utc).isoformat(),
-                "status": "timeout",
-                "exit_code": None,
-            }
-        )
-    except Exception as exc:
-        output = f"[Internal error: {exc}]"
-        meta.update(
-            {
-                "finished_at": datetime.now(timezone.utc).isoformat(),
-                "status": "error",
-                "exit_code": -1,
-            }
-        )
-
-    (run_path / "output.txt").write_text(output)
-    (run_path / "meta.json").write_text(json.dumps(meta, indent=2))
+    threading.Thread(
+        target=_audit_worker, args=(run_id, run_path, meta, cmd), daemon=True
+    ).start()
     return run_id, meta
 
 
@@ -387,10 +403,11 @@ def auth_ui(request: Request) -> HTMLResponse:
 
 
 @app.post("/api/run-audit", tags=["audits"], dependencies=[Depends(require_api_key)])
-def api_run_audit(req: AuditRequest) -> dict:
+def api_run_audit(req: AuditRequest) -> JSONResponse:
     """
-    Trigger an SEO audit.  Blocks until complete (up to AUDIT_TIMEOUT_SECONDS).
-    Protected by X-API-Key header when API_KEY env is set.
+    Start an SEO audit in the background.  Returns 202 immediately with the
+    run_id.  Poll GET /api/audits/{id} for status, or stream output via
+    GET /audits/{id}/stream (SSE).
     """
     if not req.url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
@@ -399,18 +416,61 @@ def api_run_audit(req: AuditRequest) -> dict:
             status_code=400,
             detail=f"Unknown command '{req.command}'. Allowed: {sorted(ALLOWED_COMMANDS)}",
         )
+    run_id, meta = _start_audit(req.url, req.command)
+    return JSONResponse({"id": run_id, "status": meta["status"]}, status_code=202)
 
-    run_id, meta = _execute_audit(req.url, req.command)
 
-    if meta["status"] == "timeout":
-        raise HTTPException(status_code=504, detail=f"Audit timed out after {AUDIT_TIMEOUT}s")
-
+@app.get("/audits/{run_id}/stream", tags=["audits"])
+def audit_stream(run_id: str) -> StreamingResponse:
+    """
+    Server-Sent Events stream of live audit output.
+    Sends chunks as the claude CLI writes them; emits a final 'done' event
+    with the status when the audit finishes (or if it was already finished).
+    """
+    meta_path = _run_dir(run_id) / "meta.json"
+    if not meta_path.exists():
+        raise HTTPException(status_code=404, detail="Audit not found")
     output_path = _run_dir(run_id) / "output.txt"
-    return {
-        "id": run_id,
-        "status": meta["status"],
-        "output": output_path.read_text() if output_path.exists() else "",
-    }
+
+    def generate():
+        pos = 0
+        while True:
+            # Drain any new bytes written to the output file
+            if output_path.exists():
+                new_size = output_path.stat().st_size
+                if new_size > pos:
+                    with open(output_path, "r", errors="replace") as f:
+                        f.seek(pos)
+                        chunk = f.read(new_size - pos)
+                    pos = new_size
+                    if chunk:
+                        yield f"data: {json.dumps(chunk)}\n\n"
+
+            if run_id not in _running_jobs:
+                # Final drain (last bytes the worker may have flushed)
+                if output_path.exists():
+                    new_size = output_path.stat().st_size
+                    if new_size > pos:
+                        with open(output_path, "r", errors="replace") as f:
+                            f.seek(pos)
+                            chunk = f.read()
+                        if chunk:
+                            yield f"data: {json.dumps(chunk)}\n\n"
+                try:
+                    final_status = json.loads(meta_path.read_text()).get("status", "unknown")
+                except Exception:
+                    final_status = "unknown"
+                yield f"event: done\ndata: {json.dumps({'status': final_status})}\n\n"
+                return
+
+            time.sleep(0.25)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                 "Connection": "keep-alive"},
+    )
 
 
 @app.get("/api/audits", tags=["audits"])

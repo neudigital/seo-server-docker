@@ -256,6 +256,25 @@ nav a.nav-link:hover { color: #fff; }
 .badge-timeout { background: #fef9c3; color: var(--amber); }
 .badge-running { background: #dbeafe; color: var(--brand); }
 
+/* ── Live indicator ──────────────────────────────────────────────────────── */
+
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+  animation: pulse-dot 1.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.75); }
+}
+
 /* ── Empty state ─────────────────────────────────────────────────────────── */
 
 .empty-state {
@@ -359,7 +378,8 @@ nav a.nav-link:hover { color: #fff; }
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 72vh;
+  min-height: 30vh;
+  max-height: 80vh;
   overflow-y: auto;
 }
 
