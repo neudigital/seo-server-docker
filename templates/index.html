@@ -52,6 +52,7 @@
       <th>Status</th>
       <th>Started</th>
       <th>Duration</th>
+      <th>Cost</th>
       <th></th>
     </tr>
   </thead>
@@ -73,11 +74,25 @@
           <span class="badge badge-running">running</span>
         {% endif %}
       </td>
+      <td class="cost-cell">
+        {% if a.cost_usd is defined %}
+          <span class="cost-pill">${{ "%.4f"|format(a.cost_usd) }}</span>
+        {% else %}
+          <span class="muted-dash">—</span>
+        {% endif %}
+      </td>
       <td><a href="/audits/{{ a.id }}">View →</a></td>
     </tr>
     {% endfor %}
   </tbody>
 </table>
+{% set total_cost = audits | selectattr('cost_usd', 'defined') | sum(attribute='cost_usd') %}
+{% if total_cost > 0 %}
+<div class="cost-summary">
+  Total API spend across {{ audits | selectattr('cost_usd', 'defined') | list | length }} tracked audit(s):
+  <strong>${{ "%.4f"|format(total_cost) }}</strong>
+</div>
+{% endif %}
 {% else %}
 <div class="empty-state">
   <p>No audits yet. Run your first one above.</p>

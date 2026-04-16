@@ -135,32 +135,115 @@ def _build_prompt(command: str, url: str) -> str:
     )
 
 
+def _fmt_tool_call(name: str, inp: dict) -> str:
+    """Format a tool_use block into a human-readable one-liner."""
+    if name in ("bash", "computer"):
+        cmd = inp.get("command") or inp.get("action") or ""
+        return f"\n$ {cmd[:300]}\n" if cmd else f"\n[{name}]\n"
+    if name in ("web_fetch", "web_search", "WebFetch", "WebSearch"):
+        target = inp.get("url") or inp.get("query") or ""
+        prefix = ">" if "fetch" in name.lower() else "?"
+        return f"\n{prefix} {target[:300]}\n"
+    if name in ("read", "write", "Read", "Write"):
+        path = inp.get("path") or inp.get("file_path") or ""
+        return f"\n[{name}] {path[:200]}\n"
+    # Generic fallback
+    snippet = str(inp)[:120] if inp else ""
+    return f"\n[{name}] {snippet}\n"
+
+
 def _audit_worker(run_id: str, run_path: Path, meta: dict, cmd: list) -> None:
     """
-    Background thread: runs claude CLI, streams stdout/stderr directly to
-    output.txt so the SSE endpoint can tail it in real time.
+    Background thread: runs claude CLI with stream-json output, translates
+    each JSON event to human-readable text written to output.txt in real time,
+    and extracts cost/token usage from the final result event.
     """
     output_path = run_path / "output.txt"
     try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=str(run_path),
+            env={**os.environ},
+        )
+        _running_jobs[run_id] = proc
+
+        deadline = time.monotonic() + AUDIT_TIMEOUT
         with open(output_path, "w", buffering=1) as outfile:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=outfile,
-                stderr=subprocess.STDOUT,   # merge stderr so it shows in the stream
-                text=True,
-                cwd=str(run_path),
-                env={**os.environ},
-            )
-            _running_jobs[run_id] = proc
-            try:
-                proc.wait(timeout=AUDIT_TIMEOUT)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-                outfile.write(f"\n[Audit timed out after {AUDIT_TIMEOUT}s]\n")
-                meta.update({"status": "timeout", "exit_code": None,
-                             "finished_at": datetime.now(timezone.utc).isoformat()})
-                return
+            assert proc.stdout
+            for raw_line in proc.stdout:
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    outfile.write(f"\n[Audit timed out after {AUDIT_TIMEOUT}s]\n")
+                    meta.update({"status": "timeout", "exit_code": None,
+                                 "finished_at": datetime.now(timezone.utc).isoformat()})
+                    return
+
+                raw_line = raw_line.rstrip("\n")
+                if not raw_line:
+                    continue
+                try:
+                    event = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    # Plain text fallback (e.g. if --bare was used)
+                    outfile.write(raw_line + "\n")
+                    continue
+
+                etype = event.get("type", "")
+
+                if etype == "assistant":
+                    for block in event.get("message", {}).get("content", []):
+                        btype = block.get("type", "")
+                        if btype == "text":
+                            outfile.write(block["text"])
+                        elif btype == "tool_use":
+                            outfile.write(_fmt_tool_call(
+                                block.get("name", "tool"),
+                                block.get("input", {}),
+                            ))
+
+                elif etype == "tool":
+                    # Suppress noisy full tool output; just show errors
+                    result = event.get("result", {})
+                    if result.get("is_error"):
+                        err = str(result.get("output", ""))[:400]
+                        outfile.write(f"[tool error] {err}\n")
+
+                elif etype == "result":
+                    # Final event — harvest billing data
+                    cost = event.get("total_cost_usd") or event.get("cost_usd")
+                    usage = event.get("usage") or {}
+                    dur_ms = event.get("duration_ms")
+                    if cost is not None:
+                        meta["cost_usd"] = round(float(cost), 6)
+                    if usage:
+                        meta["usage"] = {
+                            "input_tokens": usage.get("input_tokens", 0),
+                            "output_tokens": usage.get("output_tokens", 0),
+                            "cache_read_tokens": usage.get("cache_read_input_tokens", 0),
+                            "cache_creation_tokens": usage.get("cache_creation_input_tokens", 0),
+                        }
+                    if dur_ms is not None:
+                        meta["duration_ms"] = int(dur_ms)
+                    # If Claude itself reported an error, note it
+                    if event.get("subtype") == "error_during_execution":
+                        err_text = str(event.get("result", ""))[:600]
+                        outfile.write(f"\n[Claude error] {err_text}\n")
+
+                elif etype == "system":
+                    pass  # init/ping events — no display needed
+
+                else:
+                    # Unknown event types — write raw for debuggability
+                    outfile.write(raw_line + "\n")
+
+        proc.wait()
+        stderr = proc.stderr.read() if proc.stderr else ""
+        if proc.returncode != 0 and stderr:
+            with open(output_path, "a") as f:
+                f.write(f"\n--- stderr ---\n{stderr[:4000]}\n")
         meta.update({
             "finished_at": datetime.now(timezone.utc).isoformat(),
             "status": "success" if proc.returncode == 0 else "error",
@@ -197,7 +280,8 @@ def _start_audit(url: str, command: str) -> tuple[str, dict]:
     (run_path / "meta.json").write_text(json.dumps(meta, indent=2))
 
     cmd = [
-        "claude", "--bare", "-p", _build_prompt(command, url),
+        "claude", "--output-format", "stream-json",
+        "-p", _build_prompt(command, url),
         "--allowedTools", "Bash,Read,Write,WebFetch,WebSearch",
     ]
     threading.Thread(

@@ -41,6 +41,21 @@
       {% endif %}
     </div>
   </div>
+  {% if meta.cost_usd is defined %}
+  <div class="meta-card meta-card-cost">
+    <div class="label">API cost</div>
+    <div class="value cost-value">${{ "%.4f"|format(meta.cost_usd) }}</div>
+    {% if meta.usage %}
+    <div class="cost-tokens">
+      <span title="Input tokens">↓ {{ "{:,}".format(meta.usage.input_tokens) }}</span>
+      <span title="Output tokens">↑ {{ "{:,}".format(meta.usage.output_tokens) }}</span>
+      {% if meta.usage.cache_read_tokens %}
+      <span title="Cache read tokens" class="cache-tokens">⚡ {{ "{:,}".format(meta.usage.cache_read_tokens) }}</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
   <div class="meta-card">
     <div class="label">Run ID</div>
     <div class="value mono-sm">{{ meta.id }}</div>

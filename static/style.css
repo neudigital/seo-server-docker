@@ -405,6 +405,52 @@ nav a.nav-link:hover { color: #fff; }
 
 .copy-btn:hover { background: rgba(255, 255, 255, 0.14); color: #e2e8f0; }
 
+/* ── Cost display ────────────────────────────────────────────────────────── */
+
+.meta-card-cost { border-color: #bbf7d0; background: #f0fdf4; }
+
+.cost-value {
+  color: #15803d;
+  font-size: 1.1rem;
+  font-family: var(--mono);
+}
+
+.cost-tokens {
+  display: flex;
+  gap: 0.625rem;
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.cache-tokens { color: #d97706; }
+
+.cost-cell { white-space: nowrap; }
+
+.cost-pill {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-family: var(--mono);
+  color: #15803d;
+  font-weight: 600;
+}
+
+.muted-dash { color: var(--muted); }
+
+.cost-summary {
+  margin-top: 0.875rem;
+  font-size: 0.825rem;
+  color: var(--muted);
+  text-align: right;
+}
+
+.cost-summary strong { color: #15803d; font-family: var(--mono); }
+
 /* ── Auth page ───────────────────────────────────────────────────────────── */
 
 .start-btn {
