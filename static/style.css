@@ -385,6 +385,25 @@ nav a.nav-link:hover { color: #fff; }
 
 .copy-btn:hover { background: rgba(255, 255, 255, 0.14); color: #e2e8f0; }
 
+/* ── Auth page ───────────────────────────────────────────────────────────── */
+
+.start-btn {
+  padding: .6rem 1.25rem;
+  background: var(--brand);
+  color: #fff;
+  border: none;
+  border-radius: .5rem;
+  font-size: .875rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  transition: background .15s;
+}
+.start-btn:hover  { background: var(--brand-dark); }
+.start-btn:disabled { opacity: .55; cursor: not-allowed; }
+
 /* ── Responsive ──────────────────────────────────────────────────────────── */
 
 @media (max-width: 640px) {

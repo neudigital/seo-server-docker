@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Authentication — Claude SEO{% endblock %}
+
+{% block content %}
+<a class="back-link" href="/">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 5-7 7 7 7"/></svg>
+  Back
+</a>
+
+<div class="run-card" style="max-width:640px">
+  <h2>Claude Code authentication</h2>
+  <p style="font-size:.875rem;color:var(--muted);margin:.5rem 0 1.25rem">
+    Use this when you see <strong>"Credit balance is too low"</strong> and want to
+    authenticate with your <strong>claude.ai Max subscription</strong> instead of
+    an API key.  Click the button, then open the URL shown below in your browser.
+  </p>
+
+  <button class="start-btn" id="startBtn">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+    Start claude login
+  </button>
+
+  <div id="statusBox" style="display:none;margin-top:1.25rem">
+    <div id="spinner" class="progress-msg visible" style="margin:0 0 1rem">
+      <span class="spinner"></span>
+      <span id="statusText">Waiting for claude login…</span>
+    </div>
+
+    <div id="urlBox" style="display:none">
+      <p style="font-size:.875rem;font-weight:600;margin-bottom:.5rem">Open this URL in your browser to authorize:</p>
+      <div class="output-card" style="border-radius:.5rem">
+        <div class="output-header">
+          <span>Authorization URL</span>
+          <button class="copy-btn" id="copyUrlBtn">Copy</button>
+        </div>
+        <pre id="authUrl" style="max-height:5rem;font-size:.8rem;padding:.875rem 1rem"></pre>
+      </div>
+      <a id="authLink" href="#" target="_blank" rel="noopener"
+         style="display:inline-flex;align-items:center;gap:.4rem;margin-top:.75rem;font-size:.875rem;color:var(--brand);font-weight:500">
+        Open in new tab →
+      </a>
+    </div>
+
+    <div id="successBox" class="alert alert-info" style="display:none;margin-top:1rem"></div>
+    <div id="errorBox" class="alert alert-error" style="display:none;margin-top:1rem"></div>
+  </div>
+
+  <div class="alert alert-info" style="margin-top:1.5rem;font-size:.8rem;line-height:1.6">
+    <strong>After authorizing:</strong> remove (or clear) the
+    <code>ANTHROPIC_API_KEY</code> environment variable in Dockge and restart the
+    stack — otherwise Claude Code continues to use the API key instead of the
+    OAuth session.
+  </div>
+</div>
+
+<script>
+(function () {
+  const startBtn  = document.getElementById('startBtn');
+  const statusBox = document.getElementById('statusBox');
+  const spinnerEl = document.getElementById('spinner');
+  const statusText = document.getElementById('statusText');
+  const urlBox    = document.getElementById('urlBox');
+  const authUrlEl = document.getElementById('authUrl');
+  const authLink  = document.getElementById('authLink');
+  const successBox = document.getElementById('successBox');
+  const errorBox  = document.getElementById('errorBox');
+  const copyUrlBtn = document.getElementById('copyUrlBtn');
+
+  let polling = null;
+
+  function setStatus(data) {
+    statusText.textContent = data.message || data.status;
+
+    if (data.url) {
+      urlBox.style.display = 'block';
+      authUrlEl.textContent = data.url;
+      authLink.href = data.url;
+    }
+
+    if (data.status === 'complete') {
+      spinnerEl.classList.remove('visible');
+      successBox.style.display = 'block';
+      successBox.textContent = '✓ Login completed! Now remove ANTHROPIC_API_KEY from your container env and restart the stack.';
+      clearInterval(polling);
+    } else if (data.status === 'error') {
+      spinnerEl.classList.remove('visible');
+      errorBox.style.display = 'block';
+      errorBox.textContent = 'Error: ' + (data.message || 'unknown error');
+      clearInterval(polling);
+      startBtn.disabled = false;
+    }
+  }
+
+  startBtn.addEventListener('click', async () => {
+    startBtn.disabled = true;
+    statusBox.style.display = 'block';
+    successBox.style.display = 'none';
+    errorBox.style.display = 'none';
+    urlBox.style.display = 'none';
+    spinnerEl.classList.add('visible');
+    statusText.textContent = 'Starting claude login…';
+
+    try {
+      const resp = await fetch('/auth/login', { method: 'POST' });
+      const data = await resp.json();
+      setStatus(data);
+
+      if (data.status === 'pending' || data.status === 'complete') {
+        polling = setInterval(async () => {
+          const r = await fetch('/auth/status');
+          setStatus(await r.json());
+        }, 2000);
+      }
+    } catch (err) {
+      errorBox.style.display = 'block';
+      errorBox.textContent = 'Request failed: ' + err.message;
+      spinnerEl.classList.remove('visible');
+      startBtn.disabled = false;
+    }
+  });
+
+  copyUrlBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(authUrlEl.textContent).then(() => {
+      copyUrlBtn.textContent = 'Copied!';
+      setTimeout(() => { copyUrlBtn.textContent = 'Copy'; }, 2000);
+    });
+  });
+})();
+</script>
+{% endblock %}

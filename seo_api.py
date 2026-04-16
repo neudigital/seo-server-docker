@@ -8,7 +8,9 @@ browsing history.
 
 import json
 import os
+import re
 import subprocess
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -291,6 +293,94 @@ def debug() -> dict:
             "skills_installed": skills_installed,
         },
     }
+
+
+# ── Claude login flow ────────────────────────────────────────────────────────
+# claude login is interactive (shows an OAuth URL then waits for the browser
+# callback).  We run it in a background thread, parse the URL from stdout,
+# and expose it via /auth/* endpoints so users can authorize from the web UI.
+
+_login_lock = threading.Lock()
+_login_state: dict = {"status": "idle", "url": None, "message": ""}
+_login_proc: Optional[subprocess.Popen] = None
+
+
+def _run_login_background() -> None:
+    global _login_proc, _login_state
+    try:
+        _login_proc = subprocess.Popen(
+            ["claude", "login"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env={**os.environ},
+        )
+        assert _login_proc.stdout
+        for line in _login_proc.stdout:
+            urls = re.findall(r"https?://\S+", line)
+            if urls and not _login_state["url"]:
+                with _login_lock:
+                    _login_state["url"] = urls[0].rstrip(".")
+            # Look for success signals in the output
+            low = line.lower()
+            if any(w in low for w in ("success", "logged in", "authenticated")):
+                with _login_lock:
+                    _login_state["status"] = "complete"
+                    _login_state["message"] = line.strip()
+        _login_proc.wait()
+        with _login_lock:
+            if _login_state["status"] == "pending":
+                if _login_proc.returncode == 0:
+                    _login_state["status"] = "complete"
+                    _login_state["message"] = "Login completed."
+                else:
+                    _login_state["status"] = "error"
+                    _login_state["message"] = "claude login exited with an error."
+    except Exception as exc:
+        with _login_lock:
+            _login_state["status"] = "error"
+            _login_state["message"] = str(exc)
+
+
+@app.post("/auth/login", tags=["auth"])
+def auth_login_start() -> dict:
+    """
+    Start the claude login OAuth flow in the background.
+    Returns the authorization URL as soon as it is emitted by the CLI.
+    Visit that URL in your browser to authorize.  Poll /auth/status to track
+    completion.  After login completes, remove ANTHROPIC_API_KEY from the
+    container env so Claude Code uses the OAuth session instead.
+    """
+    global _login_state, _login_proc
+    with _login_lock:
+        if _login_state["status"] == "pending":
+            return {"status": "pending", "url": _login_state["url"], "message": "Login already in progress"}
+        _login_state = {"status": "pending", "url": None, "message": "Starting claude login…"}
+
+    t = threading.Thread(target=_run_login_background, daemon=True)
+    t.start()
+
+    # Wait up to 15 s for the URL to appear
+    import time
+    for _ in range(30):
+        time.sleep(0.5)
+        if _login_state["url"] or _login_state["status"] in ("complete", "error"):
+            break
+
+    with _login_lock:
+        return dict(_login_state)
+
+
+@app.get("/auth/status", tags=["auth"])
+def auth_login_status() -> dict:
+    """Poll this after calling POST /auth/login to check if authorization completed."""
+    with _login_lock:
+        return dict(_login_state)
+
+
+@app.get("/auth", response_class=HTMLResponse, include_in_schema=False)
+def auth_ui(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "auth.html", {})
 
 
 # ── JSON API ──────────────────────────────────────────────────────────────────
