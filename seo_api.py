@@ -166,12 +166,6 @@ def _ensure_health_score(meta: dict, run_path: Path) -> dict:
 
 _FILE_OUTPUT_INSTRUCTIONS = """
 
-<execution_strategy>
-Run any specialist subagents SEQUENTIALLY — one at a time, not in parallel. This is required
-to stay within API rate limits. If you encounter an HTTP 429 rate-limit error, pause for
-60 seconds then retry that specific request before continuing.
-</execution_strategy>
-
 <output_requirements>
 CRITICAL — you MUST write your findings to files using the Write tool. Do not skip this step
 or claim scripts are unavailable. Write the files directly yourself:
